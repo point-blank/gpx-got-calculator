@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"time"
 )
 
 // GPX represents the root of a GPX file
@@ -28,10 +29,11 @@ type TrackSegment struct {
 
 // TrackPoint represents a <trkpt> element in GPX
 type TrackPoint struct {
-	XMLName   xml.Name `xml:"trkpt"`
-	Latitude  float64  `xml:"lat,attr"`
-	Longitude float64  `xml:"lon,attr"`
-	Elevation float64  `xml:"ele"` // Elevation in meters
+	XMLName   xml.Name  `xml:"trkpt"`
+	Latitude  float64   `xml:"lat,attr"`
+	Longitude float64   `xml:"lon,attr"`
+	Elevation float64   `xml:"ele"`
+	Time      time.Time `xml:"time"`
 }
 
 // earthRadius is the average radius of the Earth in kilometers
@@ -161,6 +163,15 @@ func applyLatLonSmoothing(points []TrackPoint, windowSize int) []TrackPoint {
 	return smoothed
 }
 
+func groupByDay(points []TrackPoint) map[string][]TrackPoint {
+	grouped := make(map[string][]TrackPoint)
+	for _, p := range points {
+		day := p.Time.Format("2006-01-02") // YYYY-MM-DD
+		grouped[day] = append(grouped[day], p)
+	}
+	return grouped
+}
+
 func calculateGOTAscent(n float64) int {
 	val := n / 100.0
 	return int(math.Round(val))
@@ -168,6 +179,10 @@ func calculateGOTAscent(n float64) int {
 
 func calculateGOTDistance(n float64) int {
 	return int(math.Round(n))
+}
+
+func calculateDailyGOTPoints(distance int, ascent int) int {
+	return distance + ascent
 }
 
 func main() {
@@ -193,8 +208,13 @@ func main() {
 
 	fmt.Printf("Successfully parsed GPX file. Found %d tracks.\n", len(gpx.Tracks))
 
-	totalDistanceKm := 0.0
-	totalAscentMeters := 0.0
+	results := make(map[string]struct {
+		Distance float64
+		Ascent   float64
+	})
+
+	// totalDistanceKm := 0.0
+	// totalAscentMeters := 0.0
 
 	const ascentThreshold = 1.5
 	const movingAverageWindowSize = 3
@@ -202,22 +222,48 @@ func main() {
 	for _, track := range gpx.Tracks {
 		fmt.Printf("Track Name: %s\n", track.Name)
 		for _, segment := range track.TrackSegs {
-			smoothed := applyMovingAverage(segment.TrackPoints, movingAverageWindowSize)
-			smoothed = applyLatLonSmoothing(smoothed, movingAverageWindowSize)
+			grouped := groupByDay(segment.TrackPoints)
 
-			for i := 1; i < len(smoothed); i++ {
-				totalDistanceKm += haversineDistance2D(smoothed[i-1], smoothed[i])
+			for day, pts := range grouped {
+				smoothed := applyMovingAverage(pts, movingAverageWindowSize)
+				smoothed = applyLatLonSmoothing(smoothed, movingAverageWindowSize)
+
+				dist := 0.0
+				for i := 1; i < len(smoothed); i++ {
+					dist += haversineDistance2D(smoothed[i-1], smoothed[i])
+				}
+
+				// Ascent
+				ascent := calculateCumulativeAscent(smoothed, ascentThreshold)
+
+				// Save results
+				r := results[day]
+				r.Distance += dist
+				r.Ascent += ascent
+				results[day] = r
+
 			}
-			totalAscentMeters += calculateCumulativeAscent(smoothed, ascentThreshold)
 		}
 	}
 
-	fmt.Printf("\n--- Results ---\n")
-	fmt.Printf("Total Distance: %.2f km\n", totalDistanceKm)
-	fmt.Printf("Total Ascent: %.2f meters (smoothed with  %.1fm threshold)\n",
-		totalAscentMeters, ascentThreshold)
-	fmt.Printf("\n--- GOT points ---\n")
-	fmt.Printf("Distance points: %d pkt\n", calculateGOTDistance(totalDistanceKm))
-	fmt.Printf("Ascent points: %d pkt\n", calculateGOTAscent(totalAscentMeters))
+	fmt.Println("\n--- Results ---")
+	for day, r := range results {
+		fmt.Printf("%s -> Distance: %.2f km, Ascent: %.0f m\n",
+			day, r.Distance, r.Ascent)
+
+		var gotDistance = calculateGOTDistance(r.Distance)
+		var gotAscent = calculateGOTAscent(r.Ascent)
+
+		fmt.Printf("%s -> GOT distance points: %d pkt, GOT ascent points: %d pkt\n",
+			day, gotDistance, gotAscent)
+
+		var gotSum = calculateDailyGOTPoints(gotDistance, gotAscent)
+		if gotSum >= 50 {
+			fmt.Printf("%s -> GOT points LIMIT achieved %d\n", day, 50)
+		} else {
+			fmt.Printf("%s -> GOT points achieved %d\n", day, gotSum)
+		}
+
+	}
 
 }
