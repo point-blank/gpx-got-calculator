@@ -1,0 +1,28 @@
+name: GPX Calculation
+
+on:
+  workflow_dispatch:
+    inputs:
+      gpx_base64:
+        description: "Base64 encoded GPX file content"
+        required: true
+        type: string
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Decode GPX
+        run: |
+          echo "${{ github.event.inputs.gpx_base64 }}" | base64 -d > input.gpx
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Run Analysis
+        run: go run gpx.go input.gpx 
+
