@@ -163,10 +163,11 @@ func applyLatLonSmoothing(points []TrackPoint, windowSize int) []TrackPoint {
 	return smoothed
 }
 
-func groupByDay(points []TrackPoint) map[string][]TrackPoint {
+func groupByDay(points []TrackPoint, location *time.Location) map[string][]TrackPoint {
 	grouped := make(map[string][]TrackPoint)
 	for _, p := range points {
-		day := p.Time.Format("2006-01-02") // YYYY-MM-DD
+		localTime := p.Time.In(location)
+		day := localTime.Format("2006-01-02") // YYYY-MM-DD
 		grouped[day] = append(grouped[day], p)
 	}
 	return grouped
@@ -196,25 +197,29 @@ func main() {
 	gpxData, err := os.ReadFile(filePath)
 	if err != nil {
 		fmt.Printf("Error reading GPX file: %v\n", err)
-		return
+		os.Exit(1)
 	}
 
 	var gpx GPX
 	err = xml.Unmarshal(gpxData, &gpx)
+
 	if err != nil {
 		fmt.Printf("Error unmarshaling GPX XML: %v\n", err)
-		return
+		os.Exit(1)
 	}
 
 	fmt.Printf("Successfully parsed GPX file. Found %d tracks.\n", len(gpx.Tracks))
+
+	polandLocation, err := time.LoadLocation("Europe/Warsaw")
+	if err != nil {
+		fmt.Printf("Error loading timezone 'Europe/Warsaw': %v. Using UTC.\n", err)
+		polandLocation = time.UTC // Fallback to UTC
+	}
 
 	results := make(map[string]struct {
 		Distance float64
 		Ascent   float64
 	})
-
-	// totalDistanceKm := 0.0
-	// totalAscentMeters := 0.0
 
 	const ascentThreshold = 1.5
 	const movingAverageWindowSize = 3
@@ -222,7 +227,7 @@ func main() {
 	for _, track := range gpx.Tracks {
 		fmt.Printf("Track Name: %s\n", track.Name)
 		for _, segment := range track.TrackSegs {
-			grouped := groupByDay(segment.TrackPoints)
+			grouped := groupByDay(segment.TrackPoints, polandLocation)
 
 			for day, pts := range grouped {
 				smoothed := applyMovingAverage(pts, movingAverageWindowSize)
@@ -233,10 +238,8 @@ func main() {
 					dist += haversineDistance2D(smoothed[i-1], smoothed[i])
 				}
 
-				// Ascent
 				ascent := calculateCumulativeAscent(smoothed, ascentThreshold)
 
-				// Save results
 				r := results[day]
 				r.Distance += dist
 				r.Ascent += ascent
